@@ -6,11 +6,13 @@
 
     <artifactId>wicca</artifactId>
     <packaging>pom</packaging>
+
     <modules>
         <module>wicca-core</module>
     </modules>
-    <groupId>net.disbelieve.wicca.cassandra</groupId>
-    <version>0.9-SNAPSHOT</version>
+
+    <groupId>net.disbelieve.wicca</groupId>
+    <version>0.9</version>
 
     <build>
         <plugins>
