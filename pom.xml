@@ -5,14 +5,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>wicca</artifactId>
+    <groupId>net.disbelieve.wicca</groupId>
+    <version>0.9</version>
     <packaging>pom</packaging>
 
     <modules>
         <module>wicca-core</module>
     </modules>
-
-    <groupId>net.disbelieve.wicca</groupId>
-    <version>0.9</version>
 
     <build>
         <plugins>
