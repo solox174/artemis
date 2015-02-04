@@ -1,13 +1,11 @@
-wicca
+hydra-core
 ==========
 
-RESTful Web Service built on Jersey 2 and Datastax CQL3 driver
-If you are implementing a new Service, check the wicca-example project. You can declare the parent of the pom of your
-project as jesse for convenience if you want to keep your own pom clean of plugins like the Maven war plugin. It also
-provides a jetty plugin so running "maven jetty:run" will startup Jetty on http://localhost:8080 making testing your
-app easy. Include wicca-core a dependency.
+RESTful Web SErvice built on Jersey 2 and CQL3
+If you are implementing a new Service, check the artemis-example project. The top level pom in your project must declare artemis as
+it's parent. The only dependencies you will need to declare will be those that are unique to your project.  
 
-Dependencies already provided in wicca-core:
+Dependencies already provided:
 Netty
 LogBack
 javax-rs
@@ -16,12 +14,12 @@ Jersey 2
 Datastax Driver
 javax.Servlet
 
-Maven Plugins already provided in wicca:
+Maven Plugins already provided:
 Jetty Maven
 Maven War
 
-Unless you override CassandraApplication or declare you packages in a web.xml, your Jersey Resource classes should be in
-the package net.disbelieve.wicca.jersey.service
+Your Jersey Resource classes must be in the package:
+net.disbelieve.artemis.jersey.resource
 
-You may provide a web.xml, but none is required. To configure your application, extending
-net.disbelieve.wicca.jersey.CassandraApplication is preferred.
+You may provide a web.xml, but none is required. To configure your application, extending net.disbelieve.artemis.jersey.ArtemisApplication
+is preferred.
