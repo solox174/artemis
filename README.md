@@ -1,4 +1,4 @@
-hydra-core
+artemis-core
 ==========
 
 RESTful Web SErvice built on Jersey 2 and CQL3
