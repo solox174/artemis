@@ -3,6 +3,7 @@ package net.disbelieve.artemis.cassandra.dao;
 import net.disbelieve.artemis.cassandra.CassandraConnect;
 import net.disbelieve.artemis.jmx.CassandraMetadataMXBeanImpl;
 import net.disbelieve.artemis.jmx.MXBeansManager;
+import net.disbelieve.artemis.utils.MappedResult;
 import com.datastax.driver.core.*;
 import com.datastax.driver.mapping.Mapper;
 import com.datastax.driver.mapping.MappingManager;
@@ -33,7 +34,7 @@ public abstract class CassandraDAO<T> {
     /**
      * The Session.
      */
-    static Session session;
+    protected static Session session;
 
     /**
      * Instantiates a new Cassandra DAO.
@@ -63,113 +64,142 @@ public abstract class CassandraDAO<T> {
     /**
      * Gets a record by the partition and cluster keys
      *
-     * @param queue      the blocking queue
      * @param primaryKey the primary key
-     * @return the blocking queue containing the mapped models, or, in the case of an error, the Throwable
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public BlockingQueue<Optional> getOne(BlockingQueue<Optional> queue, Object... primaryKey) {
+    public MappedResult getOne(Object... primaryKey) {
         Statement statement = mapper.getQuery(primaryKey);
         statement.setConsistencyLevel(getConsistencyLevel(QueryType.READ));
         ListenableFuture resultFuture = session.executeAsync(statement);
-        addCallBack(queue, resultFuture, false);
+        MappedResult mappedResult = new MappedResult();
+        addCallBack(mappedResult, resultFuture, false);
 
-        return queue;
+        return mappedResult;
     }
 
     /**
      * Gets all records by partition key.
      *
-     * @param queue  the blocking queue
      * @param getAll the preparedStatement defining "all" for the model type
-     * @return the blocking queue containing the mapped models, or, in the case of an error, the Throwable
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public BlockingQueue<Optional> getAll(BlockingQueue<Optional> queue, BoundStatement getAll) {
+    public MappedResult getAll(BoundStatement getAll) {
         getAll.setConsistencyLevel(getConsistencyLevel(QueryType.READ));
         ResultSetFuture future = session.executeAsync(getAll);
-        addCallBack(queue, future, true);
+        MappedResult mappedResult = new MappedResult();
+        addCallBack(mappedResult, future, true);
 
-        return queue;
+        return mappedResult;
     }
 
     /**
      * Gets all records by partition key.
      * <p/>
      * Implemented by sub-class. Data in {@code data} which should the be passed to
-     * {@link #getAll(java.util.concurrent.BlockingQueue,
-     * com.datastax.driver.core.BoundStatement) getAll} for execution
+     * {@link #getAll(com.datastax.driver.core.BoundStatement) getAll} for execution
      *
-     * @param queue the blocking queue
-     * @param data  the object containing information that may be bound to a
-     *              {@link com.datastax.driver.core.BoundStatement}
-     * @return the blocking queue containing the mapped models, or, in the case of an error, the Throwable
+     * @param data the object containing information that may be bound to a
+     *             {@link com.datastax.driver.core.BoundStatement}
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public abstract BlockingQueue<Optional> getAll(BlockingQueue<Optional> queue, T data);
+    public abstract MappedResult getAll(T data);
 
     /**
      * Inserts/updates (Cassandra makes no distinction) a single record into Cassandra
      *
-     * @param queue the blocking queue
      * @param model the model to be written into Cassandra
-     *              return the blocking queue passed in by the client used to pass back either the result, or
-     *              in the case of an error, the Throwable
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public BlockingQueue<Optional> put(BlockingQueue<Optional> queue, Object model) {
+    public MappedResult put(Object model) {
         Statement statement = mapper.saveQuery(model);
         statement.setConsistencyLevel(getConsistencyLevel(QueryType.WRITE));
         ListenableFuture future = session.executeAsync(statement);
-        addCallBack(queue, future, true);
+        MappedResult mappedResult = new MappedResult();
+        addCallBack(mappedResult, future, true);
 
-        return queue;
+        return mappedResult;
+    }
+
+    /**
+     * Inserts/updates (Cassandra makes no distinction) a multiple record into Cassandra
+     *
+     * @param datum the models to be written into Cassandra
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
+     */
+    // This should go somewhere else. It can span multiple column families, and currently each DAO instance is meant
+    // to represent one. It's only here because it's repeatable code that might be useful to the end user.
+    public MappedResult putAll(Object... datum) {
+        BatchStatement batchStatement = new BatchStatement();
+        Statement statement;
+
+        for (Object data : datum) {
+            mapper = mappingManager.mapper(data.getClass());
+            statement = mapper.saveQuery(data);
+            batchStatement.add(statement);
+        }
+
+        return executeBatch(batchStatement);
     }
 
     /**
      * Deletes a single record into Cassandra
      *
-     * @param queue      the blocking queue
      * @param primaryKey the primary key
-     * @return the blocking queue containing the "results" (basically a no-op), or, in the case of an error, the Throwable
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public BlockingQueue<Optional> deleteOne(BlockingQueue<Optional> queue, Object... primaryKey) {
+    public MappedResult deleteOne(Object... primaryKey) {
         Statement statement = mapper.deleteQuery(primaryKey);
         statement.setConsistencyLevel(getConsistencyLevel(QueryType.WRITE));
         ListenableFuture future = session.executeAsync(statement);
-        addCallBack(queue, future, false);
+        MappedResult mappedResult = new MappedResult();
+        addCallBack(mappedResult, future, false);
 
-        return queue;
+        return mappedResult;
     }
 
     /**
      * Deletes all records in a row in Cassandra
      *
-     * @param queue     the blocking queue
      * @param deleteAll the preparedStatement defining "all" for the model type
-     * @return the blocking queue containing the "results" (basically a no-op), or, in the case of an error, the Throwable
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public BlockingQueue<Optional> deleteAll(BlockingQueue<Optional> queue, BoundStatement deleteAll) {
+    public MappedResult deleteAll(BoundStatement deleteAll) {
         deleteAll.setConsistencyLevel(getConsistencyLevel(QueryType.WRITE));
         ResultSetFuture future = session.executeAsync(deleteAll);
-        addCallBack(queue, future, false);
+        MappedResult mappedResult = new MappedResult();
 
-        return queue;
+        addCallBack(mappedResult, future, false);
+
+        return mappedResult;
     }
 
     /**
      * Executes a {@code BatchStatement}
      *
-     * @param queue the blocking queue
      * @param batch the batch containing all the statements to be executed where success is all or none
-     * @return the blocking queue containing the "results" (basically a no-op), or, in the case of an error, the Throwable
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public BlockingQueue<Optional> executeBatch(BlockingQueue<Optional> queue, BatchStatement batch) {
+    // This should go somewhere else. It can span multiple column families, and currently each DAO instance is meant
+    // to represent one. It's only here because it's repeatable code that might be useful to the end user.
+    public MappedResult executeBatch(BatchStatement batch) {
         ConsistencyLevel consistencyLevel = getConsistencyLevel(QueryType.WRITE);
+        MappedResult mappedResult = new MappedResult();
 
         for (Statement statement : batch.getStatements()) {
             statement.setConsistencyLevel(consistencyLevel);
         }
         ResultSetFuture future = session.executeAsync(batch);
-        addCallBack(queue, future, true);
+        addCallBack(mappedResult, future, true);
 
-        return queue;
+        return mappedResult;
     }
 
     /**
@@ -177,47 +207,41 @@ public abstract class CassandraDAO<T> {
      * <p/>
      * Implemented by sub-class. Data in {@code data} should be bound to a
      * {@link com.datastax.driver.core.BoundStatement} which should the be passed to
-     * {@link #deleteAll(java.util.concurrent.BlockingQueue, com.datastax.driver.core.BoundStatement) deleteAll} for
+     * {@link #deleteAll(com.datastax.driver.core.BoundStatement) deleteAll} for
      * execution
      *
-     * @param queue the blocking queue
-     * @param data  the object containing information that may be bound to a
-     *              {@link com.datastax.driver.core.BoundStatement}
-     * @return the blocking queue passed in by the client used to return the "results" (basically a no-op) or, in the
-     * case of an error, the Throwable
+     * @param data the object containing information that may be bound to a
+     *             {@link com.datastax.driver.core.BoundStatement}
+     * @return the MappedResult containing the ResultSet mapped to the model type, or, in the case of an error,
+     * the Throwable
      */
-    public abstract BlockingQueue<Optional> deleteAll(BlockingQueue<Optional> queue, T data);
+    public abstract MappedResult deleteAll(T data);
 
-    protected void addCallBack(final BlockingQueue queue, ListenableFuture future, final Boolean asListIfOne) {
+    protected void addCallBack(final MappedResult mappedResult, ListenableFuture future, final Boolean asListIfOne) {
         Futures.addCallback(future, new FutureCallback() {
             @Override
             public void onSuccess(Object obj) {
-                mapResult(queue, obj, asListIfOne);
+                if (obj instanceof ResultSet) {
+                    mapResult(mappedResult, obj, asListIfOne);
+                }
             }
 
             @Override
             public void onFailure(Throwable throwable) {
-                queue.add(Optional.fromNullable(throwable));
+                mappedResult.setError(throwable);
             }
         });
     }
 
-    protected BlockingQueue<Optional> mapResult(BlockingQueue<Optional> queue, Object obj, Boolean asListIfOne) {
-        try {
-            Optional optional;
-            Result results = mapper.map((ResultSet) obj);
-            List list = results.all();
+    protected void mapResult(MappedResult mappedResult, Object obj, Boolean asListIfOne) {
+        Result results = mapper.map((ResultSet) obj);
+        List list = results.all();
 
-            if (!asListIfOne && list.size() < 2) {
-                optional = Optional.fromNullable(list.get(0));
-            } else {
-                optional = Optional.fromNullable(list);
-            }
-            queue.put(optional);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        if (!asListIfOne && list.size() < 2) {
+            mappedResult.setResult(list.get(0));
+        } else {
+            mappedResult.setResult(list);
         }
-        return queue;
     }
 
     protected ConsistencyLevel getConsistencyLevel(QueryType queryType) {
@@ -234,5 +258,4 @@ public abstract class CassandraDAO<T> {
         }
         return consistencyLevel;
     }
-
 }

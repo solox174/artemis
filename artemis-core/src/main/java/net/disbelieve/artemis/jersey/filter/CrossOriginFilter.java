@@ -11,6 +11,6 @@ import java.io.IOException;
 public class CrossOriginFilter implements ContainerResponseFilter {
     @Override
     public void filter(ContainerRequestContext containerRequestContext, ContainerResponseContext containerResponseContext) throws IOException {
-        containerResponseContext.getHeaders().add("Access-Control-Allow-Origin", "http://localhost:63342");
+        containerResponseContext.getHeaders().add("Access-Control-Allow-Origin", "*");
     }
 }
