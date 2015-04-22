@@ -11,6 +11,7 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
     private ConsistencyLevel writeConsistencyLevel;
     private ConsistencyLevel readConsistencyLevelOverride;
     private ConsistencyLevel writeConsistencyLevelOverride;
+
     public static enum Attributes {
         READ_CONSISTENCY_LEVEL("ReadConsistencyLevel"),
         WRITE_CONSISTENCY_LEVEL("WriteConsistencyLevel"),
@@ -22,24 +23,26 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
             name = s;
         }
 
-        public String toString(){
+        public String toString() {
             return name;
         }
 
     }
 
-    public CassandraMetadataMXBeanImpl() {}
+    public CassandraMetadataMXBeanImpl() {
+    }
 
     public CassandraMetadataMXBeanImpl(Cluster cluster) {
         this.cluster = cluster;
         this.readConsistencyLevel = cluster.getConfiguration().getQueryOptions().getConsistencyLevel();
         this.writeConsistencyLevel = cluster.getConfiguration().getQueryOptions().getConsistencyLevel();
     }
+
     public String getAllHosts() {
         StringBuffer sb = new StringBuffer();
 
-        for(Host host : cluster.getMetadata().getAllHosts()) {
-           sb.append(host.toString());
+        for (Host host : cluster.getMetadata().getAllHosts()) {
+            sb.append(host.toString());
         }
         return sb.toString();
     }
@@ -47,7 +50,7 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
     public String getKeyspaces() {
         StringBuffer sb = new StringBuffer();
 
-        for(KeyspaceMetadata km : cluster.getMetadata().getKeyspaces()) {
+        for (KeyspaceMetadata km : cluster.getMetadata().getKeyspaces()) {
             sb.append(km.exportAsString());
         }
         return sb.toString();
@@ -56,14 +59,15 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
     public String getColumnFamilies() {
         StringBuffer sb = new StringBuffer();
 
-        for(KeyspaceMetadata km : cluster.getMetadata().getKeyspaces()) {
-            for(TableMetadata tbl : km.getTables()) {
+        for (KeyspaceMetadata km : cluster.getMetadata().getKeyspaces()) {
+            for (TableMetadata tbl : km.getTables()) {
                 sb.append(tbl.exportAsString());
             }
         }
         return sb.toString();
 
     }
+
     public String getReadConsistencyLevel() {
         return readConsistencyLevelOverride == null ? readConsistencyLevel.toString() :
                 readConsistencyLevelOverride.toString();

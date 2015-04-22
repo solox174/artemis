@@ -29,7 +29,7 @@ public class MXBeansManager {
         try {
             obj = mbs.getAttribute(getMXName(mxBean), attribute);
         } catch (Exception e) {
-            logger.error("Could not get MXBean attribute: "+e);
+            logger.error("Could not get MXBean attribute: " + e);
         }
         return obj;
     }
@@ -47,7 +47,7 @@ public class MXBeansManager {
         String nameString;
         try {
             nameString = mxBean.getPackage().toString().split(" ")[1];
-            nameString += ":name="+mxBean.getSimpleName();
+            nameString += ":name=" + mxBean.getSimpleName();
             objectName = new ObjectName(nameString);
         } catch (Exception e) {
             logger.error("Could not get MXBean name: " + e);

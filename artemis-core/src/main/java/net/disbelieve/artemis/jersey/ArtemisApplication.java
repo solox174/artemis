@@ -39,12 +39,14 @@ class ArtemisApplication extends ResourceConfig {
         try {
             InputStream propertyStream = getClass().getClassLoader().getResourceAsStream("cassandra.properties");
             propertiesDefault.load(propertyStream);
-        } catch (IOException e) {
+        } catch (IOException ioe) {
+            logger.info("Could not load cassandra.properties", ioe);
+        } catch (Exception e) {
             logger.info("Could not load cassandra.properties", e);
         }
+
         try {
-            //File jarLoc = new File(getClass().getProtectionDomain().getCodeSource().getLocation().toURI());
-            String overridePropertyLoc = System.getProperties().getProperty("config");
+            String overridePropertyLoc = System.getProperties().getProperty("cql3Config");
             properties = new Properties(propertiesDefault);
 
             if (overridePropertyLoc != null) {
@@ -70,24 +72,22 @@ class ArtemisApplication extends ResourceConfig {
     }
 
     public ArtemisApplication() {
-        //property(EntityFilteringFeature.ENTITY_FILTERING_SCOPE,
-        //        new Annotation[] {SecurityAnnotations.rolesAllowed("user", "admin")});
-        //register(SecurityEntityFilteringFeature.class);
-
         register(JacksonFeature.class);
         register(CassandraConsistencyLevelFilter.class);
-        //register(CrossOriginFilter.class);
-        /** place in implementing service to enable OAuth security for your application*/
-        //register(SecurityContextFilter.class);
-
         packages("net.disbelieve.artemis.jersey");
 
-        cassandra = new CassandraConnect.ConnectionBuilder()
-                .contactPoints(contactPoints)
-                .localDataCenter(localDataCenter)
-                .userName(userName)
-                .password(password)
-                .compression(compression).build();
+        CassandraConnect.ConnectionBuilder builder = new CassandraConnect.ConnectionBuilder().contactPoints(contactPoints);
+        if (userName != null) {
+            builder.userName(userName)
+                    .password(password);
+        }
+        if (compression != null) {
+            builder.compression(compression);
+        }
+        if (localDataCenter != null) {
+            builder.localDataCenter(localDataCenter);
+        }
+        cassandra = builder.build();
         cassandra.connect();
 
         MXBeansManager.registerCassandraMetadata(cassandra.getSession().getCluster());
