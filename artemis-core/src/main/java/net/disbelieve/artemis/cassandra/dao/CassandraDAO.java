@@ -169,16 +169,16 @@ public class CassandraDAO<T> {
     }
 
     /**
-     * Get all where.
+     * Get where.
      * <p/>
      * Currently only the =,<, and > operands are supported on primary keys (no secondary indexes).
-     * The values provided must correspond to the columns composing the PARTITION
-     * KEY (in the order of said partition key).
+     * The values provided must correspond to the columns composing the PRIMARY
+     * KEY (in the order of said primary key).
      * <p/>
      * @param whereConditions the conditions of the select
      * @return the result
      */
-    public Result<List<T>> getAllWhere(List<Clause> whereConditions) {
+    public Result<List<T>> getWhere(List<Clause> whereConditions) {
         Select select = QueryBuilder.select().from(keyspaceName + "." + tableName);
         Result<List<T>> result = null;
 
@@ -292,16 +292,16 @@ public class CassandraDAO<T> {
     }
 
     /**
-     * Delete all where.
+     * Delete where.
      * <p/>
      * Currently only the =,<, and > operands are supported on primary keys (no secondary indexes).
-     * The values provided must correspond to the columns composing the PARTITION
-     * KEY (in the order of said partition key).
+     * The values provided must correspond to the columns composing the PRIMARY
+     * KEY (in the order of said primary key).
      * <p/>
      * @param whereConditions the conditions of the delete.
      * @return the result
      */
-    public Result<List<T>> deleteAllWhere(List<Clause> whereConditions) {
+    public Result<List<T>> deleteWhere(List<Clause> whereConditions) {
         Delete delete = QueryBuilder.delete().from(keyspaceName + "." + tableName);
         Result<List<T>> result = null;
 
