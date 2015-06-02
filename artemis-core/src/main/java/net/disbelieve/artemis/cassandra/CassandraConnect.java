@@ -19,6 +19,7 @@ public class CassandraConnect {
     private static Cluster cluster;
     private static Session session;
     private final String[] contactPoints;
+    private final Integer port;
     private final String compression;
     private final String localDataCenter;
     private final String userName;
@@ -26,6 +27,7 @@ public class CassandraConnect {
 
     public static enum PROPERTIES {
         CONTACT_POINTS("cassandra.contactPoints"),
+        PORT("cassandra.port"),
         COMPRESSION("cassandra.compression"),
         LOCAL_DATA_CENTER("cassandra.localDataCenter"),
         WRITE_CONSISTENCY_LEVEL("cassandra.writeConsistency"),
@@ -52,6 +54,7 @@ public class CassandraConnect {
 
     private CassandraConnect(ConnectionBuilder builder) {
         this.contactPoints = builder.contactPoints.split(",");
+        this.port = builder.port;
         this.compression = builder.compression;
         this.localDataCenter = builder.localDataCenter;
         this.userName = builder.userName;
@@ -78,6 +81,9 @@ public class CassandraConnect {
         if (userName != null) {
             clusterBuilder = clusterBuilder.withCredentials(userName, password);
         }
+        if(port != null) {
+                clusterBuilder.withPort(port);
+        }
         cluster = clusterBuilder
                 .addContactPoints(contactPoints)
                 .withCompression(ProtocolOptions.Compression.valueOf(compression))
@@ -103,6 +109,7 @@ public class CassandraConnect {
 
     public static class ConnectionBuilder {
         private String contactPoints;
+        private Integer port;
         private String compression;
         private String localDataCenter;
         private String userName;
@@ -110,6 +117,11 @@ public class CassandraConnect {
 
         public ConnectionBuilder contactPoints(String contactPoint) {
             this.contactPoints = contactPoint;
+            return this;
+        }
+
+        public ConnectionBuilder port(int port) {
+            this.port = port;
             return this;
         }
 

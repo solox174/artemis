@@ -9,7 +9,6 @@ import org.glassfish.jersey.server.ResourceConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.ws.rs.ApplicationPath;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -21,12 +20,12 @@ import java.util.Properties;
  */
 
 public
-@ApplicationPath("/*")
 class ArtemisApplication extends ResourceConfig {
     private static Logger logger = LoggerFactory.getLogger(ArtemisApplication.class);
     private CassandraConnect cassandra;
-    private Properties properties;
+    protected Properties properties;
     private String contactPoints;
+    private Integer port;
     private String compression;
     private String localDataCenter;
     private String writeConsistency;
@@ -59,15 +58,30 @@ class ArtemisApplication extends ResourceConfig {
             logger.info("Could not load cassandra-override.properties", e);
         }
         try {
+            String prop;
+
             contactPoints = properties.getProperty(CassandraConnect.PROPERTIES.CONTACT_POINTS.toString());
-            compression = properties.getProperty(CassandraConnect.PROPERTIES.COMPRESSION.toString()).toUpperCase();
             localDataCenter = properties.getProperty(CassandraConnect.PROPERTIES.LOCAL_DATA_CENTER.toString());
-            writeConsistency = properties.getProperty(CassandraConnect.PROPERTIES.WRITE_CONSISTENCY_LEVEL.toString()).toUpperCase();
-            readConsistency = properties.getProperty(CassandraConnect.PROPERTIES.READ_CONSISTENCY_LEVEL.toString()).toUpperCase();
             userName = properties.getProperty(CassandraConnect.PROPERTIES.USER_NAME.toString());
             password = properties.getProperty(CassandraConnect.PROPERTIES.PASSWORD.toString());
+
+            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.PORT.toString())) != null) {
+                port = Integer.parseInt(prop);
+            }
+            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.COMPRESSION.toString())) != null) {
+                compression = prop.toUpperCase();
+            }
+            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.COMPRESSION.toString())) != null) {
+                compression = prop.toUpperCase();
+            }
+            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.WRITE_CONSISTENCY_LEVEL.toString())) != null) {
+                writeConsistency = prop.toUpperCase();
+            }
+            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.READ_CONSISTENCY_LEVEL.toString())) != null) {
+                readConsistency = prop.toUpperCase();
+            }
         } catch (Exception e) {
-            logger.warn("Could not load all the required cassandra.properties", e);
+            logger.warn("Must at least provide one seed for startup ...", e);
         }
     }
 
@@ -77,6 +91,9 @@ class ArtemisApplication extends ResourceConfig {
         packages("net.disbelieve.artemis.jersey");
 
         CassandraConnect.ConnectionBuilder builder = new CassandraConnect.ConnectionBuilder().contactPoints(contactPoints);
+        if (port != null) {
+            builder.port(port);
+        }
         if (userName != null) {
             builder.userName(userName)
                     .password(password);
@@ -91,11 +108,15 @@ class ArtemisApplication extends ResourceConfig {
         cassandra.connect();
 
         MXBeansManager.registerCassandraMetadata(cassandra.getSession().getCluster());
-        MXBeansManager.setMXBeanAttribute(CassandraMetadataMXBeanImpl.class,
-                CassandraMetadataMXBeanImpl.Attributes.WRITE_CONSISTENCY_LEVEL.toString(),
-                writeConsistency);
-        MXBeansManager.setMXBeanAttribute(CassandraMetadataMXBeanImpl.class,
-                CassandraMetadataMXBeanImpl.Attributes.READ_CONSISTENCY_LEVEL.toString(),
-                readConsistency);
+        if(writeConsistency != null) {
+            MXBeansManager.setMXBeanAttribute(CassandraMetadataMXBeanImpl.class,
+                    CassandraMetadataMXBeanImpl.Attributes.WRITE_CONSISTENCY_LEVEL.toString(),
+                    writeConsistency);
+        }
+        if(readConsistency != null) {
+            MXBeansManager.setMXBeanAttribute(CassandraMetadataMXBeanImpl.class,
+                    CassandraMetadataMXBeanImpl.Attributes.READ_CONSISTENCY_LEVEL.toString(),
+                    readConsistency);
+        }
     }
 }
