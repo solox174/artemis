@@ -1,23 +1,16 @@
 package net.disbelieve.artemis.cassandra.dao;
 
 import net.disbelieve.artemis.cassandra.CassandraConnect;
+import net.disbelieve.artemis.cassandra.data.Result;
 import net.disbelieve.artemis.exception.ResultAccessException;
-import net.disbelieve.artemis.jmx.CassandraMetadataMXBeanImpl;
-import net.disbelieve.artemis.jmx.MXBeansManager;
-import net.disbelieve.artemis.utils.Result;
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.querybuilder.*;
 import com.datastax.driver.mapping.Mapper;
 import com.datastax.driver.mapping.MappingManager;
-import com.datastax.driver.mapping.annotations.ClusteringColumn;
-import com.datastax.driver.mapping.annotations.Column;
-import com.datastax.driver.mapping.annotations.PartitionKey;
-import com.datastax.driver.mapping.annotations.Table;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -34,75 +27,34 @@ import java.util.regex.Pattern;
  * @param <T> the type parameter
  */
 public class CassandraDAO<T> {
-    /**
-     * The Mapping manager.
-     */
     protected MappingManager mappingManager;
-    /**
-     * The Mapper.
-     */
     protected Mapper mapper;
-    /**
-     * The Keyspace name.
-     */
     protected String keyspaceName;
-    /**
-     * The Table name.
-     */
     protected String tableName;
-
-    private enum QueryType {
-        /**
-         * The READ.
-         */
-        READ,
-        /**
-         * The WRITE.
-         */
-        WRITE
-    }
-
-    /**
-     * The Session.
-     */
     protected static Session session;
     private Map<Integer, PreparedStatement> preparedQueries;
-    private ArrayList<String> orderedPartitionKey;
-    private ArrayList<String> orderedClusteringColumn;
+    private List<String> orderedPrimaryKey;
+    private List<String> orderedPartitionKey;
+    private List<String> orderedClusterKey;
+    private CQLUtils cqlUtils;
 
-    /**
-     * Instantiates a new Cassandra DAO.
-     */
     public CassandraDAO() {
         Type type = this.getClass().getGenericSuperclass();
 
         session = CassandraConnect.getSession();
         mappingManager = new MappingManager(session);
-        preparedQueries = new HashMap<Integer, PreparedStatement>();
-        orderedPartitionKey = new ArrayList<String>();
-        orderedClusteringColumn = new ArrayList<String>();
 
         if (type instanceof ParameterizedType) {
             Type[] types = ((ParameterizedType) type).getActualTypeArguments();
             Class modelClass = (Class) types[0];
-            Field[] fields = modelClass.getDeclaredFields();
-            Table table = (Table) modelClass.getAnnotation(Table.class);
-            PartitionKey partitionKey;
-            ClusteringColumn clusteringColumn;
-            String columnName;
-            keyspaceName = table.caseSensitiveKeyspace() ? "\"" + table.keyspace() + "\"" : table.keyspace();
-            tableName = table.caseSensitiveTable() ? "\"" + table.name() + "\"" : table.name();
+            cqlUtils = new CQLUtils(modelClass);
             mapper = mappingManager.mapper(modelClass);
-
-            for (Field field : fields) {
-                if ((partitionKey = field.getAnnotation(PartitionKey.class)) != null) {
-                    columnName = getColumnName(field);
-                    orderedPartitionKey.add(partitionKey.value(), columnName);
-                } else if ((clusteringColumn = field.getAnnotation(ClusteringColumn.class)) != null) {
-                    columnName = getColumnName(field);
-                    orderedClusteringColumn.add(clusteringColumn.value(), columnName);
-                }
-            }
+            keyspaceName = cqlUtils.getKeySpace();
+            tableName = cqlUtils.getTable();
+            orderedPrimaryKey = cqlUtils.getPrimaryKey();
+            orderedPartitionKey = cqlUtils.getPartitionKey();
+            orderedClusterKey = cqlUtils.getClusterKey();
+            preparedQueries = new HashMap<Integer, PreparedStatement>();
         }
     }
 
@@ -119,23 +71,9 @@ public class CassandraDAO<T> {
      */
     public Result<T> getOne(Object... primaryKey) {
         Statement statement = mapper.getQuery(primaryKey);
-        statement.setConsistencyLevel(getConsistencyLevel(QueryType.READ));
+        statement.setConsistencyLevel(cqlUtils.getConsistencyLevel(CQLUtils.QueryType.READ));
 
         return executeStatement(statement, false, true);
-    }
-
-    /**
-     * Gets all records by partition key.
-     *
-     * @param getAllStatement the preparedStatement defining "all" for the model type
-     * @return the Result containing the ResultSet mapped to the model type and, in the case of an error,
-     * the Throwable
-     */
-    @Deprecated
-    public Result<List<T>> getAll(BoundStatement getAllStatement) {
-        getAllStatement.setConsistencyLevel(getConsistencyLevel(QueryType.READ));
-
-        return executeStatement(getAllStatement, true, true);
     }
 
     /**
@@ -191,7 +129,24 @@ public class CassandraDAO<T> {
         return result;
     }
 
+    /**
+     * Get all records matching matching the conditions determined by which of the primary key fields
+     * in the model are set. As such, this function can do getOne, getAll, and getWhere.
+     *
+     * @param model the model
+     * @return the result
+     */
+    public Result<List<T>> get(T model) {
+        Result<List<T>> result = new Result<List<T>>();
 
+        try {
+            result = getWhere(cqlUtils.buildClause(orderedPrimaryKey, model));
+        } catch (ResultAccessException e) {
+            result.setError(e);
+        }
+
+        return result;
+    }
 
     /**
      * Inserts/updates a single record into Cassandra
@@ -202,7 +157,7 @@ public class CassandraDAO<T> {
      */
     public Result putOne(Object model) {
         Statement statement = mapper.saveQuery(model);
-        statement.setConsistencyLevel(getConsistencyLevel(QueryType.WRITE));
+        statement.setConsistencyLevel(cqlUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE));
 
         return executeStatement(statement);
     }
@@ -242,23 +197,9 @@ public class CassandraDAO<T> {
      */
     public Result<T> deleteOne(Object... primaryKey) {
         Statement statement = mapper.deleteQuery(primaryKey);
-        statement.setConsistencyLevel(getConsistencyLevel(QueryType.WRITE));
+        statement.setConsistencyLevel(cqlUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE));
 
         return executeStatement(statement);
-    }
-
-    /**
-     * Deletes all records in a row
-     *
-     * @param deleteAll the preparedStatement defining "all" for the model type
-     * @return the Result containing the ResultSet and, in the case of an error,
-     * the Throwable
-     */
-    @Deprecated
-    public Result<List<T>> deleteAll(BoundStatement deleteAll) {
-        deleteAll.setConsistencyLevel(getConsistencyLevel(QueryType.WRITE));
-
-        return executeStatement(deleteAll);
     }
 
     /**
@@ -314,6 +255,24 @@ public class CassandraDAO<T> {
         return result;
     }
 
+    /**
+     * Delete all records matching matching the conditions determined by which of the primary key fields
+     * in the model are set. As such, this function can do getOne, getAll, and getWhere.
+     *
+     * @param model the model
+     * @return the result
+     */
+    public Result<List<T>> delete(T model) {
+        Result<List<T>> result = new Result<List<T>>();
+
+        try {
+            result = deleteWhere(cqlUtils.buildClause(orderedPrimaryKey, model));
+        } catch (ResultAccessException e) {
+            result.setError(e);
+        }
+
+        return result;
+    }
 
     /**
      * Gets count.
@@ -387,7 +346,7 @@ public class CassandraDAO<T> {
     // This should go somewhere else. It can span multiple column families, and currently each DAO instance is meant
     // to represent one. It's only here because it's repeatable code that might be useful to the end user.
     public Result executeBatch(BatchStatement batch) {
-        ConsistencyLevel consistencyLevel = getConsistencyLevel(QueryType.WRITE);
+        ConsistencyLevel consistencyLevel = cqlUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE);
 
         for (Statement statement : batch.getStatements()) {
             statement.setConsistencyLevel(consistencyLevel);
@@ -395,25 +354,11 @@ public class CassandraDAO<T> {
         return executeStatement(batch);
     }
 
-    /**
-     * Execute statement. Does not map.
-     *
-     * @param statement the statement to execute
-     * @return the result
-     */
-    protected Result executeStatement(Statement statement) {
+    private Result executeStatement(Statement statement) {
         return executeStatement(statement, false, false);
     }
 
-    /**
-     * Execute statement.
-     *
-     * @param statement   the statement to execute
-     * @param asListIfOne mappedResult as a list even for one Row
-     * @param mapResult   map the result
-     * @return the result
-     */
-    protected Result executeStatement(Statement statement, boolean asListIfOne, boolean mapResult) {
+    private Result executeStatement(Statement statement, boolean asListIfOne, boolean mapResult) {
         Result result = new Result();
         ResultSetFuture future = session.executeAsync(statement);
 
@@ -422,15 +367,7 @@ public class CassandraDAO<T> {
         return result;
     }
 
-    /**
-     * Add call back.
-     *
-     * @param result      the result
-     * @param future      the future
-     * @param asListIfOne the as list if one
-     * @param mapResult   the map result
-     */
-    protected void addCallBack(final Result result, ListenableFuture future, final Boolean asListIfOne, final boolean mapResult) {
+    private void addCallBack(final Result result, ListenableFuture future, final Boolean asListIfOne, final boolean mapResult) {
         Futures.addCallback(future, new FutureCallback() {
             @Override
             public void onSuccess(Object obj) {
@@ -452,14 +389,7 @@ public class CassandraDAO<T> {
         });
     }
 
-    /**
-     * Map result.
-     *
-     * @param result      the result
-     * @param obj         the obj
-     * @param asListIfOne the as list if one
-     */
-    protected void mapResult(Result result, Object obj, Boolean asListIfOne) {
+    private void mapResult(Result result, Object obj, Boolean asListIfOne) {
         com.datastax.driver.mapping.Result results = mapper.map((ResultSet) obj);
         List list = results.all();
 
@@ -472,45 +402,21 @@ public class CassandraDAO<T> {
         }
     }
 
-    /**
-     * Gets consistency level.
-     *
-     * @param queryType the query type
-     * @return the consistency level
-     */
-    protected ConsistencyLevel getConsistencyLevel(QueryType queryType) {
-        ConsistencyLevel consistencyLevel = null;
-
-        if (queryType == QueryType.READ) {
-            consistencyLevel = ConsistencyLevel.valueOf((String) MXBeansManager.getMXBeanAttribute(
-                    CassandraMetadataMXBeanImpl.class,
-                    CassandraMetadataMXBeanImpl.Attributes.READ_CONSISTENCY_LEVEL.toString()));
-        } else if (queryType == QueryType.WRITE) {
-            consistencyLevel = ConsistencyLevel.valueOf((String) MXBeansManager.getMXBeanAttribute(
-                    CassandraMetadataMXBeanImpl.class,
-                    CassandraMetadataMXBeanImpl.Attributes.WRITE_CONSISTENCY_LEVEL.toString()));
-        }
-        return consistencyLevel;
-    }
-
     private BoundStatement bindPreparedStatement(BuiltStatement statement, List<Clause> whereConditions) throws ResultAccessException {
         String preparedQueryString = statement.getQueryString();
         int hash = preparedQueryString.hashCode();
         PreparedStatement preparedQuery;
         BoundStatement boundPreparedStatement;
-        List<String> orderedValues = new ArrayList<String>();
+        List orderedValues = new ArrayList();
 
         if (whereConditions != null && whereConditions.size() > 0) {
-            List<String> orderedPrimaryKey = new ArrayList<String>();
             List<String> orderedKeys = new ArrayList<String>();
-            HashMap<String, String> whereConditionsMap = new HashMap<String, String>();
+            HashMap whereConditionsMap = new HashMap();
             StringBuffer preparedQueryStringBuffer = new StringBuffer(preparedQueryString.replaceAll(";"," where "));
             Pattern p = Pattern.compile("(\"?\\w+\"?[<>=])'(\\w+)'");
             String column;
             Matcher m = null;
             int i = 0;
-            orderedPrimaryKey.addAll(orderedPartitionKey);
-            orderedPrimaryKey.addAll(orderedClusteringColumn);
 
             if(statement instanceof Delete) {
                 Delete.Where where = ((Delete)statement).where();
@@ -560,45 +466,19 @@ public class CassandraDAO<T> {
         }
         boundPreparedStatement = new BoundStatement(preparedQuery);
 
-        for(String orderedValue : orderedValues) {
-            boundPreparedStatement.bind(orderedValue);
+        for(int i = 0; i < orderedValues.size(); ++i) {
+            Object o = orderedValues.get(i);
+            if(o instanceof  Integer) {
+                boundPreparedStatement.setInt(i, (Integer) o);
+            } else if (o instanceof String) {
+                boundPreparedStatement.setString(i, (String) o);
+            } else if (o instanceof Float) {
+                boundPreparedStatement.setFloat(i, (Float)o);
+            } else if (o instanceof Long) {
+                boundPreparedStatement.setLong(i, (Long)o);
+            }
         }
 
         return boundPreparedStatement;
     }
-
-    private String getColumnName(Field columnField) {
-        Column column;
-        String columnName;
-
-        if((column = columnField.getAnnotation(Column.class)) != null) {
-            columnName = column.name();
-
-            if(column.caseSensitive()) {
-                columnName = QueryBuilder.quote(columnName);
-            }
-        } else {
-            columnName = columnField.getName().split("get")[0];
-        }
-
-        return columnName;
-    }
-
-    /*PreparedStatement getPreparedQuery(com.datastax.driver.mapping.QueryType type) {
-        PreparedStatement stmt = preparedQueries.get(type);
-        if (stmt == null) {
-            synchronized (preparedQueries) {
-                stmt = preparedQueries.get(type);
-                if (stmt == null) {
-                    String query = type.makePreparedQueryString(tableMetadata, mapper);
-                    logger.debug("Preparing query {}", query);
-                    stmt = session().prepare(query);
-                    Map<com.datastax.driver.mapping.QueryType, PreparedStatement> newQueries = new HashMap<com.datastax.driver.mapping.QueryType, PreparedStatement>(preparedQueries);
-                    newQueries.put(type, stmt);
-                    preparedQueries = newQueries;
-                }
-            }
-        }
-        return stmt;
-    }*/
 }
