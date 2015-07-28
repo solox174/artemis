@@ -1,7 +1,7 @@
-package net.disbelieve.artemis.jersey.filter;
+package com.comcast.artemis.jersey.filter;
 
-import net.disbelieve.artemis.jmx.CassandraMetadataMXBeanImpl;
-import net.disbelieve.artemis.jmx.MXBeansManager;
+import com.comcast.artemis.jmx.CassandraMetadataMXBeanImpl;
+import com.comcast.artemis.jmx.MXBeansManager;
 
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.container.ContainerRequestFilter;

@@ -1,4 +1,4 @@
-package net.disbelieve.artemis.jmx;
+package com.comcast.artemis.jmx;
 
 /**
  * Created by kmatth002c on 1/6/2015.

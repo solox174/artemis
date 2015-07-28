@@ -1,4 +1,4 @@
-package net.disbelieve.artemis.jmx;
+package com.comcast.artemis.jmx;
 
 import com.datastax.driver.core.Cluster;
 import org.slf4j.Logger;
@@ -14,13 +14,13 @@ import java.lang.management.ManagementFactory;
  */
 public class MXBeansManager {
     private static MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-    private static Logger logger = LoggerFactory.getLogger(MXBeansManager.class);
+    private static final Logger LOG = LoggerFactory.getLogger(MXBeansManager.class);
 
     public static void registerCassandraMetadata(Cluster metadata) {
         try {
             mbs.registerMBean(new CassandraMetadataMXBeanImpl(metadata), getMXName(CassandraMetadataMXBeanImpl.class));
         } catch (Exception e) {
-            logger.error("Could not register MXBean: " + e);
+            LOG.error("Could not register MXBean: " + e);
         }
     }
 
@@ -29,7 +29,7 @@ public class MXBeansManager {
         try {
             obj = mbs.getAttribute(getMXName(mxBean), attribute);
         } catch (Exception e) {
-            logger.error("Could not get MXBean attribute: " + e);
+            LOG.error("Could not get MXBean attribute: " + e);
         }
         return obj;
     }
@@ -38,7 +38,7 @@ public class MXBeansManager {
         try {
             mbs.setAttribute(getMXName(mxBean), new Attribute(attributeName, attributeValue));
         } catch (Exception e) {
-            logger.error("Could not set MXBean attribute: " + e);
+            LOG.error("Could not set MXBean attribute: " + e);
         }
     }
 
@@ -50,7 +50,7 @@ public class MXBeansManager {
             nameString += ":name=" + mxBean.getSimpleName();
             objectName = new ObjectName(nameString);
         } catch (Exception e) {
-            logger.error("Could not get MXBean name: " + e);
+            LOG.error("Could not get MXBean name: " + e);
         }
         return objectName;
     }

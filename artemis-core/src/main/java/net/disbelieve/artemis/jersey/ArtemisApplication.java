@@ -1,9 +1,14 @@
-package net.disbelieve.artemis.jersey;
+package com.comcast.artemis.jersey;
 
-import net.disbelieve.artemis.cassandra.CassandraConnect;
-import net.disbelieve.artemis.jersey.filter.CassandraConsistencyLevelFilter;
-import net.disbelieve.artemis.jmx.CassandraMetadataMXBeanImpl;
-import net.disbelieve.artemis.jmx.MXBeansManager;
+import com.comcast.artemis.cassandra.CassandraConnect;
+import com.comcast.artemis.cassandra.dao.CassandraDAO;
+import com.comcast.artemis.cassandra.dao.Repository;
+import com.comcast.artemis.exception.ConnectionException;
+import com.comcast.artemis.jersey.filter.CassandraConsistencyLevelFilter;
+import com.comcast.artemis.jmx.CassandraMetadataMXBeanImpl;
+import com.comcast.artemis.jmx.MXBeansManager;
+import com.comcast.artemis.utils.ClassUtils;
+import com.comcast.artemis.utils.CassandraConnectUtils;
 import org.glassfish.jersey.jackson.JacksonFeature;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.slf4j.Logger;
@@ -13,37 +18,43 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Properties;
 
 /**
  * Created by kmatth002c on 12/10/2014.
  */
 
-public
-class ArtemisApplication extends ResourceConfig {
-    private static Logger logger = LoggerFactory.getLogger(ArtemisApplication.class);
+public class ArtemisApplication extends ResourceConfig {
+    private static final Logger LOG = LoggerFactory.getLogger(ArtemisApplication.class);
+    private static final HashMap daos = new HashMap<Class,CassandraDAO>();
     private CassandraConnect cassandra;
     protected Properties properties;
-    private String contactPoints;
-    private Integer port;
-    private String compression;
-    private String localDataCenter;
-    private String writeConsistency;
-    private String readConsistency;
-    private String userName;
-    private String password;
 
-    {
+    public ArtemisApplication() {
+        CassandraConnect.ConnectionBuilder builder;
+        CassandraConnectUtils connectUtils;
         Properties propertiesDefault = new Properties();
+        InputStream propertyStream = null;
+        String writeConsistency, readConsistency;
+
         try {
-            InputStream propertyStream = getClass().getClassLoader().getResourceAsStream("cassandra.properties");
+            propertyStream = getClass().getClassLoader().getResourceAsStream("cassandra.properties");
             propertiesDefault.load(propertyStream);
         } catch (IOException ioe) {
-            logger.info("Could not load cassandra.properties", ioe);
+            LOG.info("Could not load cassandra.properties", ioe);
         } catch (Exception e) {
-            logger.info("Could not load cassandra.properties", e);
+            LOG.info("Could not load cassandra.properties", e);
+        } finally {
+            if(propertyStream != null) {
+                try {
+                    propertyStream.close();
+                } catch (IOException e) {
+                    LOG.info("Could not close property stream", e);
+                }
+            }
         }
-
         try {
             String overridePropertyLoc = System.getProperties().getProperty("cql3Config");
             properties = new Properties(propertiesDefault);
@@ -53,70 +64,50 @@ class ArtemisApplication extends ResourceConfig {
                 properties.load(overridePropertyStream);
             }
         } catch (FileNotFoundException e) {
-            logger.info("Could not find cassandra-override.properties", e);
+            LOG.info("Could not find cassandra.properties override", e);
         } catch (IOException e) {
-            logger.info("Could not load cassandra-override.properties", e);
+            LOG.info("Could not load cassandra.properties override", e);
         }
-        try {
-            String prop;
-
-            contactPoints = properties.getProperty(CassandraConnect.PROPERTIES.CONTACT_POINTS.toString());
-            localDataCenter = properties.getProperty(CassandraConnect.PROPERTIES.LOCAL_DATA_CENTER.toString());
-            userName = properties.getProperty(CassandraConnect.PROPERTIES.USER_NAME.toString());
-            password = properties.getProperty(CassandraConnect.PROPERTIES.PASSWORD.toString());
-
-            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.PORT.toString())) != null) {
-                port = Integer.parseInt(prop);
-            }
-            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.COMPRESSION.toString())) != null) {
-                compression = prop.toUpperCase();
-            }
-            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.COMPRESSION.toString())) != null) {
-                compression = prop.toUpperCase();
-            }
-            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.WRITE_CONSISTENCY_LEVEL.toString())) != null) {
-                writeConsistency = prop.toUpperCase();
-            }
-            if((prop = properties.getProperty(CassandraConnect.PROPERTIES.READ_CONSISTENCY_LEVEL.toString())) != null) {
-                readConsistency = prop.toUpperCase();
-            }
-        } catch (Exception e) {
-            logger.warn("Must at least provide one seed for startup ...", e);
-        }
-    }
-
-    public ArtemisApplication() {
-        register(JacksonFeature.class);
-        register(CassandraConsistencyLevelFilter.class);
-        packages("net.disbelieve.artemis.jersey");
-
-        CassandraConnect.ConnectionBuilder builder = new CassandraConnect.ConnectionBuilder().contactPoints(contactPoints);
-        if (port != null) {
-            builder.port(port);
-        }
-        if (userName != null) {
-            builder.userName(userName)
-                    .password(password);
-        }
-        if (compression != null) {
-            builder.compression(compression);
-        }
-        if (localDataCenter != null) {
-            builder.localDataCenter(localDataCenter);
-        }
+        builder = new CassandraConnect.ConnectionBuilder();
+        connectUtils = new CassandraConnectUtils(properties);
+        connectUtils.configure(builder);
         cassandra = builder.build();
-        cassandra.connect();
 
-        MXBeansManager.registerCassandraMetadata(cassandra.getSession().getCluster());
+        try {
+            cassandra.connect();
+            List<Class> classes = ClassUtils.getAnnotatedWith("com.comcast", Repository.class);
+
+            for(Class clazz : classes) {
+                try {
+                    daos.put(clazz, clazz.newInstance());
+                } catch (InstantiationException e) {
+                    LOG.error("Could not create a DAO", e);
+                } catch (IllegalAccessException e) {
+                    LOG.error("Could not create a DAO", e);
+                }
+            }
+        } catch (ConnectionException e) {
+            LOG.error("Could not connect to Cassandra", e);
+        }
+        readConsistency = properties.getProperty(CassandraConnect.PROPERTIES.READ_CONSISTENCY_LEVEL.toString());
+        writeConsistency = properties.getProperty(CassandraConnect.PROPERTIES.WRITE_CONSISTENCY_LEVEL.toString());
+
         if(writeConsistency != null) {
             MXBeansManager.setMXBeanAttribute(CassandraMetadataMXBeanImpl.class,
                     CassandraMetadataMXBeanImpl.Attributes.WRITE_CONSISTENCY_LEVEL.toString(),
-                    writeConsistency);
+                    writeConsistency.toUpperCase());
         }
         if(readConsistency != null) {
             MXBeansManager.setMXBeanAttribute(CassandraMetadataMXBeanImpl.class,
                     CassandraMetadataMXBeanImpl.Attributes.READ_CONSISTENCY_LEVEL.toString(),
-                    readConsistency);
+                    readConsistency.toUpperCase());
         }
+        register(JacksonFeature.class);
+        register(CassandraConsistencyLevelFilter.class);
+        packages("com.comcast.artemis.jersey");
+    }
+
+    public static CassandraDAO getDAO(Class daoType) {
+        return (CassandraDAO) daos.get(daoType);
     }
 }

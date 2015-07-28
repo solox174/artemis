@@ -1,8 +1,9 @@
-package net.disbelieve.artemis.cassandra.dao;
+package com.comcast.artemis.cassandra.dao;
 
-import net.disbelieve.artemis.cassandra.CassandraConnect;
-import net.disbelieve.artemis.cassandra.data.Result;
-import net.disbelieve.artemis.exception.ResultAccessException;
+import com.comcast.artemis.cassandra.CassandraConnect;
+import com.comcast.artemis.cassandra.data.Result;
+import com.comcast.artemis.exception.ResultAccessException;
+import com.comcast.x1.crypt.CryptUtil;
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.querybuilder.*;
 import com.datastax.driver.mapping.Mapper;
@@ -11,12 +12,10 @@ import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
+import javax.management.relation.RelationServiceNotRegisteredException;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,21 +26,24 @@ import java.util.regex.Pattern;
  * @param <T> the type parameter
  */
 public class CassandraDAO<T> {
+    private final static Pattern preparedQueryPattern = Pattern.compile("([<>=]{1,2}|IN).+?(AND|$)");
+    protected static final Session session = CassandraConnect.getSession();
     protected MappingManager mappingManager;
     protected Mapper mapper;
     protected String keyspaceName;
     protected String tableName;
-    protected static Session session;
     private Map<Integer, PreparedStatement> preparedQueries;
     private List<String> orderedPrimaryKey;
     private List<String> orderedPartitionKey;
     private List<String> orderedClusterKey;
     private CQLUtils cqlUtils;
 
+    /**
+     * Instantiates a new Cassandra dAO.
+     */
     public CassandraDAO() {
         Type type = this.getClass().getGenericSuperclass();
 
-        session = CassandraConnect.getSession();
         mappingManager = new MappingManager(session);
 
         if (type instanceof ParameterizedType) {
@@ -60,10 +62,10 @@ public class CassandraDAO<T> {
 
     /**
      * Gets a record given it's PRIMARY KEY
-     * <p/>
+     * <p>
      * The values provided must correspond to the columns composing the PRIMARY
      * KEY (in the order of said primary key).
-     * <p/>
+     * <p>
      *
      * @param primaryKey the primary key of the record to fetch
      * @return the Result containing the ResultSet mapped to the model type and, in the case of an error,
@@ -78,49 +80,84 @@ public class CassandraDAO<T> {
 
     /**
      * Gets all records in a row given it's  PARTITION KEY.
-     * <p/>
+     * <p>
      * The values provided must correspond to the columns composing the PARTITION
      * KEY (in the order of said partition key).
-     * <p/>
+     * <p>
      *
      * @param partitionKey the partition key of the record to fetch
      * @return the Result containing the ResultSet mapped to the model type and, in the case of an error,
      * the Throwable
      */
-    public Result<List<T>> getAll(String... partitionKey) {
-        Select select = QueryBuilder.select().from(keyspaceName + "." + tableName);
+    public Result<List<T>> getRow(Object... partitionKey) {
         List<Clause> clauses = new ArrayList<Clause>();
-        Result<List<T>> result = null;
-
-        if(partitionKey.length == orderedPartitionKey.size()) {
-            for(int i = 0; i < partitionKey.length; i++) {
+        try {
+            for (int i = 0; i < partitionKey.length; i++) {
                 clauses.add(QueryBuilder.eq(orderedPartitionKey.get(i), partitionKey[i]));
             }
+
+            return getWhere(clauses);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            Result result = new Result();
+            result.setError(new ResultAccessException(e, "Wrong key count"));
+
+            return result;
         }
-        try {
-            BoundStatement boundStatement = bindPreparedStatement(select, clauses);
-            result = executeStatement(boundStatement, true, true);
-        } catch (ResultAccessException e) {
-            result.setError(e);
+    }
+
+    @Deprecated
+    public Result<List<T>> getAll(Object... partitionKey) {
+        return getRow(partitionKey);
+    }
+
+    /**
+     * Gets all records in a table
+     *
+     * @return the Result containing the ResultSet mapped to the model type and, in the case of an error,
+     * the Throwable
+     */
+    public Result<List<T>> getTable() {
+        return getTable(null);
+    }
+
+    /**
+     * Gets all records in a table
+     *
+     * @param  limit the maximun number of rows to return
+     * @return the Result containing the ResultSet mapped to the model type and, in the case of an error,
+     * the Throwable
+     */
+    public Result<List<T>> getTable(Integer limit) {
+        Select select = QueryBuilder.select().all().from(keyspaceName, tableName);
+
+        if(limit != null) {
+            select.limit(limit);
         }
-        return result;
+
+        return executeStatement(select, true, true);
     }
 
     /**
      * Get where.
-     * <p/>
+     * <p>
      * Currently only the =,<, and > operands are supported on primary keys (no secondary indexes).
      * The values provided must correspond to the columns composing the PRIMARY
      * KEY (in the order of said primary key).
-     * <p/>
+     * <p>
+     *
      * @param whereConditions the conditions of the select
      * @return the result
      */
     public Result<List<T>> getWhere(List<Clause> whereConditions) {
-        Select select = QueryBuilder.select().from(keyspaceName + "." + tableName);
-        Result<List<T>> result = null;
+        Select select = QueryBuilder.select().from(keyspaceName, tableName);
+        Result<List<T>> result = new Result<List<T>>();
 
         try {
+            Select.Where where = select.where();
+
+            for (Clause condition : whereConditions) {
+                where.and(condition);
+            }
             BoundStatement boundStatement = bindPreparedStatement(select, whereConditions);
             result = executeStatement(boundStatement, true, true);
         } catch (ResultAccessException e) {
@@ -152,25 +189,31 @@ public class CassandraDAO<T> {
      * Inserts/updates a single record into Cassandra
      *
      * @param model the model to be written into Cassandra
+     * <p>
+     * fields annotated with @Secure will be encrypted prior to write
+     * <p>
      * @return the Result containing the ResultSet and, in the case of an error,
      * the Throwable
      */
     public Result putOne(Object model) {
+        CryptUtil.encrypt(model);
         Statement statement = mapper.saveQuery(model);
         statement.setConsistencyLevel(cqlUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE));
 
-        return executeStatement(statement);
+        return executeStatement(statement, false, false);
     }
 
     /**
      * Inserts/updates (Cassandra makes no distinction) a multiple models into Cassandra
      *
-     * @param datum the models to be written into Cassandra
+     * @param datum the models to be written into Cassandra - NO ENCRYPTION SUPPORT
      * @return the Result containing the ResultSet and, in the case of an error,
      * the Throwable
+     * @deprecated
      */
     // This should go somewhere else. It can span multiple column families, and currently each DAO instance is meant
     // to represent one. It's only here because it's repeatable code that might be useful to the end user.
+    @Deprecated
     public Result putAll(Object... datum) {
         BatchStatement batchStatement = new BatchStatement();
         Statement statement;
@@ -186,10 +229,10 @@ public class CassandraDAO<T> {
 
     /**
      * Deletes a single record given it's PRIMARY KEY
-     * <p/>
+     * <p>
      * The values provided must correspond to the columns composing the PRIMARY
      * KEY (in the order of said primary key).
-     * <p/>
+     * <p>
      *
      * @param primaryKey the primary key for the record to be deleted
      * @return the Result containing the ResultSet and, in the case of an error,
@@ -199,56 +242,65 @@ public class CassandraDAO<T> {
         Statement statement = mapper.deleteQuery(primaryKey);
         statement.setConsistencyLevel(cqlUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE));
 
-        return executeStatement(statement);
+        return executeStatement(statement, false, false);
     }
 
     /**
      * Deletes all records in a row given it's PARTITION KEY
-     * <p/>
+     * <p>
      * The values provided must correspond to the columns composing the PARTITION
      * KEY (in the order of said primary key).
-     * <p/>
+     * <p>
      *
      * @param partitionKey the partitionKey of the row to delete
      * @return the Result containing the ResultSet and, in the case of an error,
      * the Throwable
      */
-    public Result<List<T>> deleteAll(String... partitionKey) {
-        Delete delete = QueryBuilder.delete().from(keyspaceName + "." + tableName);
+    public Result<List<T>> deleteRow(String... partitionKey) {
         List<Clause> clauses = new ArrayList<Clause>();
-        Result<List<T>> result = null;
 
-        if(partitionKey.length == orderedPartitionKey.size()) {
-            for(int i = 0; i < partitionKey.length; i++) {
+        try {
+            for (int i = 0; i < partitionKey.length; i++) {
                 clauses.add(QueryBuilder.eq(orderedPartitionKey.get(i), partitionKey[i]));
             }
-        }
-        try {
-            BoundStatement boundStatement = bindPreparedStatement(delete, clauses);
-            result = executeStatement(boundStatement, true, true);
-        } catch (ResultAccessException e) {
-            result.setError(e);
-        }
+
+            return deleteWhere(clauses);
+    } catch (ArrayIndexOutOfBoundsException e) {
+        Result result = new Result();
+        result.setError(new ResultAccessException(e, "Wrong key count"));
+
         return result;
+    }
+    }
+
+    @Deprecated
+    public Result<List<T>> deleteAll(String... partitionKey) {
+        return deleteRow(partitionKey);
     }
 
     /**
      * Delete where.
-     * <p/>
+     * <p>
      * Currently only the =,<, and > operands are supported on primary keys (no secondary indexes).
      * The values provided must correspond to the columns composing the PRIMARY
      * KEY (in the order of said primary key).
-     * <p/>
+     * <p>
+     *
      * @param whereConditions the conditions of the delete.
      * @return the result
      */
     public Result<List<T>> deleteWhere(List<Clause> whereConditions) {
-        Delete delete = QueryBuilder.delete().from(keyspaceName + "." + tableName);
-        Result<List<T>> result = null;
+        Delete delete = QueryBuilder.delete().from(keyspaceName, tableName);
+        Result<List<T>> result = new Result<List<T>>();
 
         try {
+            Delete.Where where = delete.where();
+
+            for (Clause condition : whereConditions) {
+                where.and(condition);
+            }
             BoundStatement boundStatement = bindPreparedStatement(delete, whereConditions);
-            result = executeStatement(boundStatement);
+            result = executeStatement(boundStatement, false, false);
         } catch (ResultAccessException e) {
             result.setError(e);
         }
@@ -275,26 +327,6 @@ public class CassandraDAO<T> {
     }
 
     /**
-     * Gets count.
-     *
-     * @param statement the statement
-     * @return the count
-     */
-    @Deprecated
-    public Result<Long> getCount(BoundStatement statement) {
-        if (statement.preparedStatement().getQueryString().contains("count")) {
-            ResultSetFuture future = session.executeAsync(statement);
-
-            return getCount(future);
-        } else {
-            Result result = new Result();
-            result.setError(new ResultAccessException(new Exception("Bad count query")));
-
-            return result;
-        }
-    }
-
-    /**
      * Gets count of rows matching whereClause.
      * Warning: this method can be very expensive and may time-out.
      *
@@ -303,35 +335,31 @@ public class CassandraDAO<T> {
      * @return the count
      */
     public Result<Long> getCount(List<Clause> whereConditions, Integer limit) {
-        Select select = QueryBuilder.select().countAll().from(keyspaceName + "." + tableName + "").limit(limit);
+        Select select = QueryBuilder.select().countAll().from(keyspaceName, tableName).limit(limit);
+        final Result result = new Result();
+        ResultSetFuture future;
 
-        if (whereConditions != null && whereConditions.size() > 0) {
+        try {
             Select.Where where = select.where();
 
-            for (Clause condition : whereConditions) {
-                where.and(condition);
+            for(Clause clause : whereConditions) {
+                where.and(clause);
             }
+            future = session.executeAsync(bindPreparedStatement(select, whereConditions));
+
+            Futures.addCallback(future, new FutureCallback() {
+                public void onSuccess(Object obj) {
+                    result.setUnmappedResultSet((ResultSet) obj);
+                    result.setMappedResult(((ResultSet) obj).one().getLong("count"));
+                }
+
+                public void onFailure(Throwable throwable) {
+                    result.setError(throwable);
+                }
+            });
+        } catch (ResultAccessException e) {
+            result.setError(e);
         }
-        ResultSetFuture future = session.executeAsync(select);
-
-        return getCount(future);
-    }
-
-    private Result getCount(ResultSetFuture future) {
-        final Result result = new Result();
-
-        Futures.addCallback(future, new FutureCallback() {
-            @Override
-            public void onSuccess(Object obj) {
-                result.setUnmappedResultSet((ResultSet) obj);
-                result.setMappedResult(((ResultSet) obj).one().getLong("count"));
-            }
-
-            @Override
-            public void onFailure(Throwable throwable) {
-                result.setError(throwable);
-            }
-        });
 
         return result;
     }
@@ -346,18 +374,22 @@ public class CassandraDAO<T> {
     // This should go somewhere else. It can span multiple column families, and currently each DAO instance is meant
     // to represent one. It's only here because it's repeatable code that might be useful to the end user.
     public Result executeBatch(BatchStatement batch) {
-        ConsistencyLevel consistencyLevel = cqlUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE);
+        ConsistencyLevel consistencyLevel = CQLUtils.getConsistencyLevel(CQLUtils.QueryType.WRITE);
 
         for (Statement statement : batch.getStatements()) {
             statement.setConsistencyLevel(consistencyLevel);
         }
-        return executeStatement(batch);
+        return executeStatement(batch, false, false);
     }
 
-    private Result executeStatement(Statement statement) {
-        return executeStatement(statement, false, false);
-    }
-
+    /**
+     * Execute statement.
+     *
+     * @param statement   the statement
+     * @param asListIfOne flag to return as a list even if there is only one record
+     * @param mapResult   flag to turn "ORM" mapping on or off
+     * @return the result
+     */
     private Result executeStatement(Statement statement, boolean asListIfOne, boolean mapResult) {
         Result result = new Result();
         ResultSetFuture future = session.executeAsync(statement);
@@ -369,7 +401,6 @@ public class CassandraDAO<T> {
 
     private void addCallBack(final Result result, ListenableFuture future, final Boolean asListIfOne, final boolean mapResult) {
         Futures.addCallback(future, new FutureCallback() {
-            @Override
             public void onSuccess(Object obj) {
                 if (obj instanceof ResultSet) {
                     result.setUnmappedResultSet((ResultSet) obj);
@@ -382,7 +413,6 @@ public class CassandraDAO<T> {
                 }
             }
 
-            @Override
             public void onFailure(Throwable throwable) {
                 result.setError(throwable);
             }
@@ -393,9 +423,13 @@ public class CassandraDAO<T> {
         com.datastax.driver.mapping.Result results = mapper.map((ResultSet) obj);
         List list = results.all();
 
+        for(int i = 0; i < list.size(); i++) {
+            CryptUtil.decrypt(list.get(i));
+        }
+
         if (!asListIfOne && list.size() == 1) {
             result.setMappedResult(list.get(0));
-        } else if (list.size() != 0) {
+        } else if (!list.isEmpty()) {
             result.setMappedResult(list);
         } else {
             result.setMappedResult(null);
@@ -403,82 +437,30 @@ public class CassandraDAO<T> {
     }
 
     private BoundStatement bindPreparedStatement(BuiltStatement statement, List<Clause> whereConditions) throws ResultAccessException {
-        String preparedQueryString = statement.getQueryString();
-        int hash = preparedQueryString.hashCode();
-        PreparedStatement preparedQuery;
-        BoundStatement boundPreparedStatement;
-        List orderedValues = new ArrayList();
+        if (whereConditions != null && !whereConditions.isEmpty()) {
+            BoundStatement boundPreparedStatement;
+            Matcher preparedQueryMatcher = preparedQueryPattern.matcher(statement.getQueryString());
+            String preparedQueryString = preparedQueryMatcher.replaceAll("$1 \\? $2");
+            int hash = preparedQueryString.hashCode();
+            PreparedStatement preparedQuery;
+            List values = new ArrayList();
 
-        if (whereConditions != null && whereConditions.size() > 0) {
-            List<String> orderedKeys = new ArrayList<String>();
-            HashMap whereConditionsMap = new HashMap();
-            StringBuffer preparedQueryStringBuffer = new StringBuffer(preparedQueryString.replaceAll(";"," where "));
-            Pattern p = Pattern.compile("(\"?\\w+\"?[<>=])'(\\w+)'");
-            String column;
-            Matcher m = null;
-            int i = 0;
-
-            if(statement instanceof Delete) {
-                Delete.Where where = ((Delete)statement).where();
-
-                for (Clause condition : whereConditions) {
-                    where.and(condition);
-                }
-                m = p.matcher(where.toString());
-            } else if(statement instanceof Select) {
-                Select.Where where = ((Select)statement).where();
-
-                for (Clause condition : whereConditions) {
-                    where.and(condition);
-                }
-                m = p.matcher(where.toString());
-                m.groupCount();
-            }
-            while (m.find()) {
-                column = m.group(1);
-                orderedKeys.add(column);
-                whereConditionsMap.put(column, m.group(2));
-            }
-
-            for(; i < orderedKeys.size(); i++) {
-                column = orderedKeys.get(i);
-
-                if(column.replaceAll(".$", "").equals(orderedPrimaryKey.get(i))) {
-                    orderedValues.add(whereConditionsMap.get(column));
-                    whereConditionsMap.remove(column);
-                    preparedQueryStringBuffer.append(column).append("?").append(" and ");
-                } else {
-                    throw new ResultAccessException("Your keys are out of order");
+            synchronized (preparedQueries) {
+                if ((preparedQuery = preparedQueries.get(hash)) == null) {
+                    preparedQuery = session.prepare(preparedQueryString);
+                    preparedQueries.put(hash, preparedQuery);
                 }
             }
-            if(!whereConditionsMap.isEmpty()) {
-                throw new ResultAccessException("Some of your columns are not part of the primary key");
-            }
-            preparedQueryString = preparedQueryStringBuffer.toString();
-            preparedQueryString = preparedQueryString.substring(0, preparedQueryString.lastIndexOf(" and ")).concat(";");
-            hash = preparedQueryString.hashCode();
-        }
-        synchronized (preparedQueries) {
-            if ((preparedQuery = preparedQueries.get(hash)) == null) {
-                preparedQuery = session.prepare(preparedQueryString);
-                preparedQueries.put(hash, preparedQuery);
-            }
-        }
-        boundPreparedStatement = new BoundStatement(preparedQuery);
+            boundPreparedStatement = new BoundStatement(preparedQuery);
 
-        for(int i = 0; i < orderedValues.size(); ++i) {
-            Object o = orderedValues.get(i);
-            if(o instanceof  Integer) {
-                boundPreparedStatement.setInt(i, (Integer) o);
-            } else if (o instanceof String) {
-                boundPreparedStatement.setString(i, (String) o);
-            } else if (o instanceof Float) {
-                boundPreparedStatement.setFloat(i, (Float)o);
-            } else if (o instanceof Long) {
-                boundPreparedStatement.setLong(i, (Long)o);
+            for(Clause clause: whereConditions) {
+                values.add(ClauseExtractor.getValues(clause));
             }
-        }
+            boundPreparedStatement.bind(values.toArray());
 
-        return boundPreparedStatement;
+            return boundPreparedStatement;
+        } else {
+            throw new ResultAccessException("Not a valid conditional query");
+        }
     }
 }

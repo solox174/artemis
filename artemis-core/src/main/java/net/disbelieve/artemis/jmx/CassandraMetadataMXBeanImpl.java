@@ -1,4 +1,4 @@
-package net.disbelieve.artemis.jmx;
+package com.comcast.artemis.jmx;
 
 import com.datastax.driver.core.*;
 
@@ -39,7 +39,7 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
     }
 
     public String getAllHosts() {
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
 
         for (Host host : cluster.getMetadata().getAllHosts()) {
             sb.append(host.toString());
@@ -48,7 +48,7 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
     }
 
     public String getKeyspaces() {
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
 
         for (KeyspaceMetadata km : cluster.getMetadata().getKeyspaces()) {
             sb.append(km.exportAsString());
@@ -57,7 +57,7 @@ public class CassandraMetadataMXBeanImpl implements CassandraMetadataMXBean {
     }
 
     public String getColumnFamilies() {
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
 
         for (KeyspaceMetadata km : cluster.getMetadata().getKeyspaces()) {
             for (TableMetadata tbl : km.getTables()) {

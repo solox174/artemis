@@ -1,16 +1,14 @@
-package net.disbelieve.artemis.cassandra;
+package com.comcast.artemis.cassandra;
 
 /**
  * Created by kmatth002c on 12/10/2014.
  */
 
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ProtocolOptions;
-import com.datastax.driver.core.Session;
+import com.comcast.artemis.exception.ConnectionException;
+import com.comcast.artemis.jmx.MXBeansManager;
+import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * The type Cassandra connect.
@@ -24,6 +22,12 @@ public class CassandraConnect {
     private final String localDataCenter;
     private final String userName;
     private final String password;
+    private final Integer coreConnectionsPerHost;
+    private final Integer idleTimeoutSeconds;
+    private final Integer maxConnectionsPerHost;
+    private final Integer maxSimultaneousRequestsPerConnectionThreshold;
+    private final Integer poolTimeoutMillis;
+    private static final Object CLUSTER_LOCK = new Object();
 
     public static enum PROPERTIES {
         CONTACT_POINTS("cassandra.contactPoints"),
@@ -33,68 +37,92 @@ public class CassandraConnect {
         WRITE_CONSISTENCY_LEVEL("cassandra.writeConsistency"),
         USER_NAME("cassandra.userName"),
         PASSWORD("cassandra.password"),
-        READ_CONSISTENCY_LEVEL("cassandra.readConsistency");
+        READ_CONSISTENCY_LEVEL("cassandra.readConsistency"),
+        CORE_CONNECTIONS_PER_HOST("cassandra.coreConnectionsPerHost"),
+        IDLE_TIMEOUT("cassandra.idleTimeout"),
+        MAX_CONNECTIONS_PER_HOST("cassandra.maxConnectionsPerHost"),
+        MAX_REQUESTS_PER_CONNECTION("cassandra.maxRequestsPerConnection"),
+        POOL_TIMEOUT("cassandra.poolTimeout");
 
         private final String s;
-
-        public String toString() {
-            return s;
-        }
 
         PROPERTIES(String s) {
             this.s = s;
         }
 
+        public String toString() {
+            return s;
+        }
     }
 
-    /**
-     * The Logger.
-     */
-    Logger logger = LoggerFactory.getLogger(CassandraConnect.class);
-
     private CassandraConnect(ConnectionBuilder builder) {
-        this.contactPoints = builder.contactPoints.split(",");
+        this.contactPoints = builder.contactPoints.replaceAll(" ", "").split(",");
         this.port = builder.port;
         this.compression = builder.compression;
         this.localDataCenter = builder.localDataCenter;
         this.userName = builder.userName;
         this.password = builder.password;
+        this.coreConnectionsPerHost = builder.coreConnectionsPerHost;
+        this.idleTimeoutSeconds = builder.idleTimeoutSeconds;
+        this.maxConnectionsPerHost = builder.maxConnectionsPerHost;
+        this.maxSimultaneousRequestsPerConnectionThreshold = builder.maxSimultaneousRequestsPerConnectionThreshold;
+        this.poolTimeoutMillis = builder.poolTimeoutMillis;
     }
 
     /**
      * Connect to the Cassandra cluster.
      */
-    public void connect() {
-        Cluster.Builder clusterBuilder = Cluster.builder();
+    public void connect() throws ConnectionException {
+        synchronized (CLUSTER_LOCK) {
+            if (cluster != null) {
+                throw new ConnectionException("Connection already exists!");
+            }
+            Cluster.Builder clusterBuilder = Cluster.builder();
+            PoolingOptions poolingOptions = new PoolingOptions();
 
-        /* if (... some pooling options ) {
-         *     PoolingOptions poolingOptions = new PoolingOptions();
-         *     poolingOptions.setXXX ...
-         *     clusterBuilder.withPoolingOptions(poolingOptions)
-         */
+            if (maxConnectionsPerHost != null) {
+                poolingOptions.setMaxConnectionsPerHost(HostDistance.LOCAL, maxConnectionsPerHost);
+            }
+            if (coreConnectionsPerHost != null) {
+                poolingOptions.setCoreConnectionsPerHost(HostDistance.LOCAL, coreConnectionsPerHost);
+            }
+            if (maxSimultaneousRequestsPerConnectionThreshold != null) {
+                poolingOptions.setMaxSimultaneousRequestsPerConnectionThreshold(HostDistance.LOCAL, maxSimultaneousRequestsPerConnectionThreshold);
+            }
+            if (idleTimeoutSeconds != null) {
+                poolingOptions.setIdleTimeoutSeconds(idleTimeoutSeconds);
+            }
+            if (poolTimeoutMillis != null) {
+                poolingOptions.setPoolTimeoutMillis(poolTimeoutMillis);
+            }
 
-        if (localDataCenter != null) {
-            DCAwareRoundRobinPolicy dcAwareRoundRobinPolicy = new DCAwareRoundRobinPolicy(localDataCenter);
-            clusterBuilder = clusterBuilder.withLoadBalancingPolicy(dcAwareRoundRobinPolicy);
-
-        }
-        if (userName != null) {
-            clusterBuilder = clusterBuilder.withCredentials(userName, password);
-        }
-        if(port != null) {
+            if (localDataCenter != null) {
+                DCAwareRoundRobinPolicy dcAwareRoundRobinPolicy = new DCAwareRoundRobinPolicy(localDataCenter);
+                clusterBuilder = clusterBuilder.withLoadBalancingPolicy(dcAwareRoundRobinPolicy);
+            }
+            if (userName != null) {
+                clusterBuilder = clusterBuilder.withCredentials(userName, password);
+            }
+            if (port != null) {
                 clusterBuilder.withPort(port);
+            }
+            if (compression != null) {
+                clusterBuilder.withCompression(ProtocolOptions.Compression.valueOf(compression));
+            }
+            clusterBuilder.withPoolingOptions(poolingOptions);
+            //NOSONAR intentional assignment of static var in non-static method protected by lock.
+            clusterBuilder.addContactPoints(contactPoints);
+            cluster = clusterBuilder.build();
+            //NOSONAR intentional assignment of static var in non-static method protected by lock.
+            session = cluster.connect();
+            MXBeansManager.registerCassandraMetadata(session.getCluster());
         }
-        cluster = clusterBuilder
-                .addContactPoints(contactPoints)
-                .withCompression(ProtocolOptions.Compression.valueOf(compression))
-                .build();
-        session = cluster.connect();
     }
 
     /**
      * Close the connection to the cluster
      */
-    public static void close() {
+    public void close() {
         cluster.close();
     }
 
@@ -114,6 +142,11 @@ public class CassandraConnect {
         private String localDataCenter;
         private String userName;
         private String password;
+        private Integer coreConnectionsPerHost;
+        private Integer idleTimeoutSeconds;
+        private Integer maxConnectionsPerHost;
+        private Integer maxSimultaneousRequestsPerConnectionThreshold;
+        private Integer poolTimeoutMillis;
 
         public ConnectionBuilder contactPoints(String contactPoint) {
             this.contactPoints = contactPoint;
@@ -142,6 +175,31 @@ public class CassandraConnect {
 
         public ConnectionBuilder password(String password) {
             this.password = password;
+            return this;
+        }
+
+        public ConnectionBuilder coreConnectionsPerHost(Integer coreConnectionsPerHost) {
+            this.coreConnectionsPerHost = coreConnectionsPerHost;
+            return this;
+        }
+
+        public ConnectionBuilder idleTimeoutSeconds(Integer idleTimeoutSeconds) {
+            this.idleTimeoutSeconds = idleTimeoutSeconds;
+            return this;
+        }
+
+        public ConnectionBuilder maxConnectionsPerHost(Integer maxConnectionsPerHost) {
+            this.maxConnectionsPerHost = maxConnectionsPerHost;
+            return this;
+        }
+
+        public ConnectionBuilder maxSimultaneousRequestsPerConnectionThreshold(Integer maxSimultaneousRequestsPerConnectionThreshold) {
+            this.maxSimultaneousRequestsPerConnectionThreshold = maxSimultaneousRequestsPerConnectionThreshold;
+            return this;
+        }
+
+        public ConnectionBuilder poolTimeoutMillis(Integer poolTimeoutMillis) {
+            this.poolTimeoutMillis = poolTimeoutMillis;
             return this;
         }
 

@@ -2,8 +2,8 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>artemis</artifactId>
-        <groupId>net.disbelieve.artemis</groupId>
-        <version>1.2.2.4-SNAPSHOT</version>
+        <groupId>com.comcast.artemis</groupId>
+        <version>1.2.3.8-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -34,6 +34,17 @@
             <groupId>net.jpountz.lz4</groupId>
             <artifactId>lz4</artifactId>
             <version>1.3.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.comcast.x1.crypt</groupId>
+            <artifactId>tde</artifactId>
+            <version>1.0.0.1</version>
+        </dependency>
+        <!-- get rid of this -->
+        <dependency>
+            <groupId>com.comcast.apps.crypt-util</groupId>
+            <artifactId>crypt-util</artifactId>
+            <version>1.0</version>
         </dependency>
 
         <!-- test deps -->
